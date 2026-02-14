@@ -1,0 +1,11 @@
+{
+  "name": "skia-assets",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "package": "node scripts/package-assets.mjs",
+    "fetch-headers": "node scripts/fetch-headers.mjs",
+    "clean": "rm -rf output/ input/headers/skia"
+  }
+}
