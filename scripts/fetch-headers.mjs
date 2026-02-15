@@ -51,20 +51,43 @@ async function main() {
   await fetchTarball(`${baseUrl}/include.tar.gz`, path.join(inputHeadersDir, 'include'));
   await fetchTarball(`${baseUrl}/modules.tar.gz`, path.join(inputHeadersDir, 'modules'));
 
-  process.stdout.write(`  ${SYMBOL_SUBSTEP} Cleaning up modules... `);
-  execSync(`find "${path.join(inputHeadersDir, 'modules')}" -type f ! -name "*.h" ! -name "*.inc" -delete`);
-  execSync(`find "${path.join(inputHeadersDir, 'modules')}" -type d -empty -delete`);
-  process.stdout.write(`${GREEN}done${RESET}\n`);
-
   await fetchTarball(`${baseUrl}/src/core.tar.gz`, path.join(inputHeadersDir, 'src', 'core'));
   await fetchTarball(`${baseUrl}/src/base.tar.gz`, path.join(inputHeadersDir, 'src', 'base'));
+  await fetchTarball(`${baseUrl}/src/utils.tar.gz`, path.join(inputHeadersDir, 'src', 'utils'));
+  await fetchTarball(`${baseUrl}/src/codec.tar.gz`, path.join(inputHeadersDir, 'src', 'codec'));
+  await fetchTarball(`${baseUrl}/src/ports.tar.gz`, path.join(inputHeadersDir, 'src', 'ports'));
   
-  process.stdout.write(`  ${SYMBOL_SUBSTEP} Cleaning up src... `);
-  execSync(`find "${path.join(inputHeadersDir, 'src')}" -type f ! -name "*.h" ! -name "*.inc" -delete`);
-  execSync(`find "${path.join(inputHeadersDir, 'src')}" -type d -empty -delete`);
+  const preservedSources = [
+    "modules/jsonreader/SkJSONReader.cpp",
+    "modules/skresources/src/SkResources.cpp",
+    "modules/skresources/src/SkAnimCodecPlayer.cpp",
+    "src/utils/SkOSPath.cpp",
+    "src/codec/SkCodecImageGenerator.cpp",
+    "src/codec/SkPixmapUtils.cpp",
+    "src/base/SkBase64.cpp",
+    "src/core/SkAutoPixmapStorage.cpp",
+    "src/ports/SkOSFile_posix.cpp",
+  ];
+
+  process.stdout.write(`  ${SYMBOL_SUBSTEP} Cleaning up files... `);
+  // Remove all non-header files except for the ones we want to preserve
+  execSync(`find "${inputHeadersDir}" -type f ! -name "*.h" ! -name "*.inc" | while read file; do
+    rel_path=$(echo "$file" | sed "s|${inputHeadersDir}/||")
+    keep=0
+    for p in ${preservedSources.join(' ')}; do
+      if [ "$rel_path" = "$p" ]; then
+        keep=1
+        break
+      fi
+    done
+    if [ "$keep" = 0 ]; then
+      rm "$file"
+    fi
+  done`);
+  execSync(`find "${inputHeadersDir}" -type d -empty -delete`);
   process.stdout.write(`${GREEN}done${RESET}\n`);
 
-  console.log(`\n${SYMBOL_SUCCESS} Headers fetched to ${DIM}input/headers/skia${RESET}`);
+  console.log(`\n${SYMBOL_SUCCESS} Headers and necessary sources fetched to ${DIM}input/headers/skia${RESET}`);
 }
 
 main().catch(error => {
