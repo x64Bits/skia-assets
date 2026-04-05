@@ -44,7 +44,7 @@ const ARCH_MAP = {
   'armeabi-v7a': 'arm-v7'
 };
 
-const INPUT_PATTERNS = {
+const SKIA_INPUT_PATTERNS = {
   'arm64-v8a': ['arm-64', 'arm64-v8a'],
   'x86_64': ['x64', 'x86_64'],
   'x86': ['x86', 'i386'],
@@ -58,7 +58,7 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`${SYMBOL_STEP} Orchestrating Skia Assets (${BRIGHT}${version}${RESET})`);
+  console.log(`${SYMBOL_STEP} Orchestrating Assets (${BRIGHT}${version}${RESET})`);
 
   // Fresh start
   await fs.rm(outputDir, { recursive: true, force: true });
@@ -66,74 +66,115 @@ async function main() {
   await ensureDir(outputDir);
 
   const artifacts = [];
-  const binariesInput = path.join(inputDir, 'binaries');
-  const files = await fs.readdir(binariesInput).catch(() => []);
 
-  // 1. Android Binaries
-  for (const [arch, patterns] of Object.entries(INPUT_PATTERNS)) {
-    const file = files.find(f => 
-      patterns.some(p => f.includes(p)) && 
-      f.endsWith('.tar.gz') && 
-      !f.includes('ios') && !f.includes('macos')
-    );
-    
-    if (!file) continue;
+  // --- 1. SKIA ---
+  const skiaBinariesInput = path.join(inputDir, 'binaries');
+  const skiaFiles = await fs.readdir(skiaBinariesInput).catch(() => []);
+  
+  if (skiaFiles.length > 0) {
+    console.log(`\n  ${SYMBOL_STEP} Processing Skia Assets`);
+    // Android Binaries
+    for (const [arch, patterns] of Object.entries(SKIA_INPUT_PATTERNS)) {
+      const file = skiaFiles.find(f => 
+        patterns.some(p => f.includes(p)) && 
+        f.endsWith('.tar.gz') && 
+        !f.includes('ios') && !f.includes('macos')
+      );
+      
+      if (!file) continue;
 
-    const mappedName = ARCH_MAP[arch];
-    const tarName = `skia-graphite-android-${mappedName}-${version}.tar.gz`;
-    const tarPath = path.join(outputDir, tarName);
-    const archivePath = path.join(binariesInput, file);
+      const mappedName = ARCH_MAP[arch];
+      const tarName = `skia-graphite-android-${mappedName}-${version}.tar.gz`;
+      const tarPath = path.join(outputDir, tarName);
+      const archivePath = path.join(skiaBinariesInput, file);
 
-    console.log(`  ${SYMBOL_STEP} Processing Android [${DIM}${arch}${RESET}]`);
-    
-    const tmpExtract = path.join(tempExtractDir, arch);
-    await ensureDir(tmpExtract);
-    execSync(`tar -xzf "${archivePath}" -C "${tmpExtract}"`);
-    
-    const entries = await fs.readdir(tmpExtract);
-    let contentRoot = tmpExtract;
-    if (entries.length === 1 && (await fs.stat(path.join(tmpExtract, entries[0]))).isDirectory()) {
-      contentRoot = path.join(tmpExtract, entries[0]);
+      console.log(`    ${SYMBOL_STEP} Processing Android [${DIM}${arch}${RESET}]`);
+      
+      const tmpExtract = path.join(tempExtractDir, `skia-${arch}`);
+      await ensureDir(tmpExtract);
+      execSync(`tar -xzf "${archivePath}" -C "${tmpExtract}"`);
+      
+      const entries = await fs.readdir(tmpExtract);
+      let contentRoot = tmpExtract;
+      if (entries.length === 1 && (await fs.stat(path.join(tmpExtract, entries[0]))).isDirectory()) {
+        contentRoot = path.join(tmpExtract, entries[0]);
+      }
+
+      await tar(contentRoot, tarPath);
+      artifacts.push({ id: `skia-android-${arch}`, name: tarName, sha256: await sha256(tarPath) });
+      await fs.rm(tmpExtract, { recursive: true, force: true });
     }
 
-    await tar(contentRoot, tarPath);
-    artifacts.push({ id: `android-${arch}`, name: tarName, sha256: await sha256(tarPath) });
-    await fs.rm(tmpExtract, { recursive: true, force: true });
+    // iOS Binaries
+    const skiaIosFiles = skiaFiles.filter(f => f.includes('ios') && f.endsWith('.tar.gz'));
+    if (skiaIosFiles.length > 0) {
+      console.log(`    ${SYMBOL_STEP} Processing iOS [${DIM}combined${RESET}]`);
+      const tarName = `skia-graphite-apple-ios-xcframeworks-${version}.tar.gz`;
+      const tarPath = path.join(outputDir, tarName);
+      const tmpExtract = path.join(tempExtractDir, 'skia-ios-combined');
+      
+      await ensureDir(tmpExtract);
+      for (const file of skiaIosFiles) {
+        execSync(`tar -xzf "${path.join(skiaBinariesInput, file)}" -C "${tmpExtract}"`);
+      }
+
+      const entries = await fs.readdir(tmpExtract);
+      let contentRoot = tmpExtract;
+      if (entries.length === 1 && entries[0] === 'ios') {
+        contentRoot = path.join(tmpExtract, 'ios');
+      }
+
+      await tar(contentRoot, tarPath);
+      artifacts.push({ id: 'skia-ios-xcframeworks', name: tarName, sha256: await sha256(tarPath) });
+      await fs.rm(tmpExtract, { recursive: true, force: true });
+    }
+
+    // Headers
+    const skiaHeadersInput = path.join(inputDir, 'headers', 'skia');
+    if (await fs.stat(skiaHeadersInput).catch(() => null)) {
+      console.log(`    ${SYMBOL_STEP} Processing Skia Headers`);
+      const tarName = `skia-graphite-headers-${version}.tar.gz`;
+      const tarPath = path.join(outputDir, tarName);
+      
+      await tar(skiaHeadersInput, tarPath);
+      artifacts.push({ id: 'skia-headers', name: tarName, sha256: await sha256(tarPath) });
+    }
   }
 
-  // 2. iOS Binaries
-  const iosFiles = files.filter(f => f.includes('ios') && f.endsWith('.tar.gz'));
-  if (iosFiles.length > 0) {
-    console.log(`  ${SYMBOL_STEP} Processing iOS [${DIM}combined${RESET}]`);
-    const tarName = `skia-graphite-apple-ios-xcframeworks-${version}.tar.gz`;
-    const tarPath = path.join(outputDir, tarName);
-    const tmpExtract = path.join(tempExtractDir, 'ios-combined');
+  // --- 2. YOGA ---
+  const yogaBinariesInput = path.join(inputDir, 'binaries', 'yoga', 'android');
+  const yogaHeadersInput = path.join(inputDir, 'headers', 'yoga');
+  
+  const hasYogaBinaries = await fs.stat(yogaBinariesInput).catch(() => null);
+  const hasYogaHeaders = await fs.stat(yogaHeadersInput).catch(() => null);
+
+  if (hasYogaBinaries || hasYogaHeaders) {
+    console.log(`\n  ${SYMBOL_STEP} Processing Yoga Assets`);
     
-    await ensureDir(tmpExtract);
-    for (const file of iosFiles) {
-      execSync(`tar -xzf "${path.join(binariesInput, file)}" -C "${tmpExtract}"`);
+    if (hasYogaBinaries) {
+      const archs = await fs.readdir(yogaBinariesInput);
+      for (const arch of archs) {
+        const archPath = path.join(yogaBinariesInput, arch);
+        if (!(await fs.stat(archPath)).isDirectory()) continue;
+        
+        const mappedName = ARCH_MAP[arch] || arch;
+        const tarName = `yoga-android-${mappedName}-${version}.tar.gz`;
+        const tarPath = path.join(outputDir, tarName);
+        
+        console.log(`    ${SYMBOL_STEP} Processing Android [${DIM}${arch}${RESET}]`);
+        await tar(archPath, tarPath);
+        artifacts.push({ id: `yoga-android-${arch}`, name: tarName, sha256: await sha256(tarPath) });
+      }
     }
-
-    const entries = await fs.readdir(tmpExtract);
-    let contentRoot = tmpExtract;
-    if (entries.length === 1 && entries[0] === 'ios') {
-      contentRoot = path.join(tmpExtract, 'ios');
-    }
-
-    await tar(contentRoot, tarPath);
-    artifacts.push({ id: 'ios-xcframeworks', name: tarName, sha256: await sha256(tarPath) });
-    await fs.rm(tmpExtract, { recursive: true, force: true });
-  }
-
-  // 3. Headers
-  const headersInput = path.join(inputDir, 'headers', 'skia');
-  if (await fs.stat(headersInput).catch(() => null)) {
-    console.log(`  ${SYMBOL_STEP} Processing Headers`);
-    const tarName = `skia-graphite-headers-${version}.tar.gz`;
-    const tarPath = path.join(outputDir, tarName);
     
-    await tar(headersInput, tarPath);
-    artifacts.push({ id: 'skia-headers', name: tarName, sha256: await sha256(tarPath) });
+    if (hasYogaHeaders) {
+      console.log(`    ${SYMBOL_STEP} Processing Yoga Headers`);
+      const tarName = `yoga-headers-${version}.tar.gz`;
+      const tarPath = path.join(outputDir, tarName);
+      
+      await tar(yogaHeadersInput, tarPath);
+      artifacts.push({ id: 'yoga-headers', name: tarName, sha256: await sha256(tarPath) });
+    }
   }
 
   console.log(`\n${SYMBOL_SUCCESS} Successfully packaged ${artifacts.length} artifacts`);

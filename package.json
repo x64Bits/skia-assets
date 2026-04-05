@@ -6,6 +6,7 @@
   "scripts": {
     "package": "node scripts/package-assets.mjs",
     "fetch-headers": "node scripts/fetch-headers.mjs",
-    "clean": "rm -rf output/ input/headers/skia"
+    "update-yoga": "node scripts/update-yoga.mjs",
+    "clean": "rm -rf output/ input/headers/skia input/headers/yoga input/binaries/yoga"
   }
 }
